@@ -5,7 +5,10 @@ import dateutil.parser
 import json
 import requests
 import pandas
+import numpy
 import nltk
+import datetime
+import os
 from nltk.stem import WordNetLemmatizer
 from nltk.corpus import wordnet
 from selenium import webdriver
@@ -27,12 +30,22 @@ scrape_params = {
 	'base_url':'https://www.amazon.com/product-reviews/',
 	'marketplace':'amazon',
 	'scrape_brands':{
+		'simply':{
+			'scrape_ids': ['B078TSRFND','B085JH7THL','B078TTS818','B078TTHTHG','B078TSYR5M','B078TSYM4L','B078TT2ZKM','B078TNDNPS']
+		},
+		'smart_water':{
+			'scrape_ids': ['B00HZYFK72','B000WGBH36','B073WWZ22T','B07QR142GZ','B0040H569E']
+		},
+		'honest':{
+			'scrape_ids': ['B003GADBYS','B08GB3NL93','B000RELGCA','B004SI15XG','B01HBB1LMG','B000VHESTQ','B003GAJQ92']
+		},
 		'honest_kids_juice':{
-			'scrape_ids': ['B08HKG49HK','B003GAJPJI']
+			'scrape_ids': ['B003GAJPJI','B00EVSYBMA','B0032JLHK8','B002QI8J3O']
 		}
 	}
 }
 def get_clean_text(text):
+    re_0 = "(\t|\n|\r)" #match tabs, newlines, carriage returns
     re_1 = "\.{1,}" #match multiple periods in a row
     re_2 = "(\’|\')" #match apostrophes
     re_3 = "\%" #match percent % characters
@@ -40,6 +53,7 @@ def get_clean_text(text):
     re_5 = "\s{2,}" #match multiple spaces in a row
     
     review_text = text.lower()
+    review_text = re.sub(re_0, " ", review_text)
     review_text = re.sub(re_1, " ", review_text)
     review_text = re.sub(re_2, "", review_text)
     review_text = re.sub(re_3, " percent", review_text)
@@ -47,6 +61,19 @@ def get_clean_text(text):
     review_text = re.sub(re_5, " ", review_text)
     
     return review_text
+
+def get_clean_number(number):
+	re_1 = "\D"
+
+	clean_number = re.sub(re_1,"",number)
+
+	return clean_number
+
+def get_clean_date(date):
+	dirty_date = date.split('on ')[1]
+	clean_date = datetime.strptime(dirty_date, '%B %d, %Y')
+	clean_date = clean_date.strftime('%m/%d/%y')
+	return clean_date
 
 def get_wordnet_pos(word):
     """Map POS tag to first character lemmatize() accepts"""
@@ -92,9 +119,15 @@ def append_data(key, value):
 	marketplace_csv[key].append(value)
 
 def create_csv(filename, data):
+	file_path = "C:\\Users\\Bogdan\\Desktop\\APS\\Coke\\amazon\\"
 	file_name = filename + '_review_data_' + datetime.today().strftime('%Y_%m_%d') + '.csv'
 	data_frame = pandas.DataFrame(data)
-	data_frame.to_csv(file_name.lower(), encoding='utf-8-sig', index=False)
+	data_frame['review_rating'].replace('', numpy.nan, inplace=True)
+	data_frame['clean_review_text'].replace('', numpy.nan, inplace=True)
+	data_frame.dropna(subset=['review_rating'], inplace=True)
+	data_frame.dropna(subset=['clean_review_text'], inplace=True)
+	data_frame.drop_duplicates(subset=['clean_review_text'], inplace=True)
+	data_frame.to_csv(file_path+file_name.lower(), encoding='utf-8-sig', index=False)
 	print(f"Finished writing {file_name}")
 
 def process_review(review):
@@ -111,7 +144,7 @@ def process_review(review):
 		append_data('review_title','')
 
 	try:
-		append_data('review_text',review.find_element(By.CSS_SELECTOR, "div.review-data span.review-text").get_attribute("innerText").strip().encode('UTF-8').decode('UTF-8'))
+		append_data('review_text',get_clean_text(review.find_element(By.CSS_SELECTOR, "div.review-data span.review-text").get_attribute("innerText").strip().encode('UTF-8').decode('UTF-8')))
 	except NoSuchElementException:
 		append_data('review_text','')
 
@@ -121,7 +154,7 @@ def process_review(review):
 		append_data('clean_review_text','')
 
 	try:
-		append_data('review_time',review.find_element(By.CSS_SELECTOR, "span.review-date").get_attribute("innerText").strip())
+		append_data('review_time',get_clean_date(review.find_element(By.CSS_SELECTOR, "span.review-date").get_attribute("innerText").strip()))
 	except NoSuchElementException:
 		append_data('review_time','')
 
@@ -171,7 +204,7 @@ for brand in scrape_params['scrape_brands']:
 
 		total_reviews = chrome_driver.find_element(By.CSS_SELECTOR, "div[data-hook='cr-filter-info-review-rating-count'] > span").get_attribute("innerText")
 		total_reviews = total_reviews.split('|')[1].strip()
-		total_reviews = int(total_reviews.split(' ')[0])
+		total_reviews = int(get_clean_number(total_reviews.split(' ')[0]))
 		print(f"Total reviews: {total_reviews}")
 
 		total_review_pages = math.ceil(total_reviews / 10)
@@ -185,7 +218,7 @@ for brand in scrape_params['scrape_brands']:
 
 		while page_number <= total_review_pages:
 			scrape_url = scrape_params['base_url'] + scrape_id + '/?pageNumber=' + str(page_number)
-			print(scrape_url)
+			print(f"Processing: {scrape_url}")
 			chrome_driver.get(scrape_url);
 			review_list = chrome_driver.find_elements(By.CSS_SELECTOR, "div.review")
 			for review in review_list:
@@ -194,9 +227,9 @@ for brand in scrape_params['scrape_brands']:
 			page_number += 1
 		
 		if product_csv_enabled:
-			create_csv(brand + '_' + scrape_id, product_csv)
+			create_csv(scrape_params['marketplace'] + '_' + brand + '_' + scrape_id, product_csv,)
 	if brand_csv_enabled:
-		create_csv(brand, brand_csv)
+		create_csv(scrape_params['marketplace'] + '_' + brand, brand_csv)
 if marketplace_csv_enabled:
 	create_csv(scrape_params['marketplace'], marketplace_csv)
 

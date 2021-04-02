@@ -5,6 +5,7 @@ import dateutil.parser
 import json
 import requests
 import pandas
+import numpy
 import nltk
 from nltk.stem import WordNetLemmatizer
 from nltk.corpus import wordnet
@@ -28,11 +29,18 @@ scrape_params = {
 	'marketplace':'walmart',
 	'scrape_brands':{
 		'honest_kids_juice':{
-			'scrape_ids': ['438874464','193397385']
+			'scrape_ids': ['438874464','30999596','909530024','118929607']
+		},
+		'smart_water':{
+			'scrape_ids': ['444036544','15580511','708013533']
+		},
+		'simply':{
+			'scrape_ids': ['35042672','35042667','405494243','959033640','775073344']
 		}
 	}
 }
 def get_clean_text(text):
+    re_0 = "(\t|\n|\r)" #match tabs, newlines, carriage returns
     re_1 = "\.{1,}" #match multiple periods in a row
     re_2 = "(\’|\')" #match apostrophes
     re_3 = "\%" #match percent % characters
@@ -40,6 +48,7 @@ def get_clean_text(text):
     re_5 = "\s{2,}" #match multiple spaces in a row
     
     review_text = text.lower()
+    review_text = re.sub(re_0, " ", review_text)
     review_text = re.sub(re_1, " ", review_text)
     review_text = re.sub(re_2, "", review_text)
     review_text = re.sub(re_3, " percent", review_text)
@@ -47,6 +56,25 @@ def get_clean_text(text):
     review_text = re.sub(re_5, " ", review_text)
     
     return review_text
+    
+    return review_text
+
+def get_clean_number(number):
+    re_1 = "\D"
+
+    clean_number = re.sub(re_1,"",number)
+
+    return clean_number
+
+def get_clean_date(date):
+	re_1 = "(\t|\n|\r)"
+	re_2 = "Verified purchase"
+	clean_date = re.sub(re_1, "", date)
+	clean_date = re.sub(re_2, "", date)
+	clean_date = clean_date.strip()
+	clean_date = datetime.strptime(clean_date, '%B %d, %Y')
+	clean_date = clean_date.strftime('%m/%d/%y')
+	return clean_date
 
 def get_wordnet_pos(word):
     """Map POS tag to first character lemmatize() accepts"""
@@ -92,9 +120,15 @@ def append_data(key, value):
 	marketplace_csv[key].append(value)
 
 def create_csv(filename, data):
+	file_path = "C:\\Users\\Bogdan\\Desktop\\APS\\Coke\\walmart\\"
 	file_name = filename + '_review_data_' + datetime.today().strftime('%Y_%m_%d') + '.csv'
 	data_frame = pandas.DataFrame(data)
-	data_frame.to_csv(file_name.lower(), encoding='utf-8-sig', index=False)
+	data_frame['review_rating'].replace('', numpy.nan, inplace=True)
+	data_frame['clean_review_text'].replace('', numpy.nan, inplace=True)
+	data_frame.dropna(subset=['review_rating'], inplace=True)
+	data_frame.dropna(subset=['clean_review_text'], inplace=True)
+	data_frame.drop_duplicates(subset=['clean_review_text'], inplace=True)
+	data_frame.to_csv(file_path+file_name.lower(), encoding='utf-8-sig', index=False)
 	print(f"Finished writing {file_name}")
 
 def process_review(review):
@@ -111,7 +145,7 @@ def process_review(review):
 		append_data('review_title','')
 
 	try:
-		append_data('review_text',review.find_element(By.CSS_SELECTOR, "div.review-text").get_attribute("innerText").strip().encode('UTF-8').decode('UTF-8'))
+		append_data('review_text',get_clean_text(review.find_element(By.CSS_SELECTOR, "div.review-text").get_attribute("innerText").strip().encode('UTF-8').decode('UTF-8')))
 	except NoSuchElementException:
 		append_data('review_text','')
 
@@ -121,7 +155,7 @@ def process_review(review):
 		append_data('clean_review_text','')
 
 	try:
-		append_data('review_time',review.find_element(By.CSS_SELECTOR, "div.review-date").get_attribute("innerText").strip())
+		append_data('review_time',get_clean_date(review.find_element(By.CSS_SELECTOR, "div.review-date").get_attribute("innerText").strip()))
 	except NoSuchElementException:
 		append_data('review_time','')
 
@@ -147,6 +181,7 @@ def process_review(review):
 
 chrome_options = Options()
 chrome_options.add_argument("--headless")
+chrome_options.add_experimental_option('excludeSwitches', ['enable-logging'])
 chrome_driver = webdriver.Chrome(options=chrome_options)
 
 marketplace_csv = review_dataset()
@@ -166,7 +201,7 @@ for brand in scrape_params['scrape_brands']:
 
 		chrome_driver.get(scrape_params['base_url'] + scrape_id);
 
-		total_reviews = chrome_driver.execute_script("return __WML_REDUX_INITIAL_STATE__.reviews[__WML_REDUX_INITIAL_STATE__.product.primaryProduct].totalReviewCount")
+		total_reviews = chrome_driver.execute_script("return __WML_REDUX_INITIAL_STATE__.reviews[__WML_REDUX_INITIAL_STATE__.product.selected.product].totalReviewCount")
 		print(f"Total reviews: {total_reviews}")
 
 		total_review_pages = math.ceil(total_reviews / 20)
@@ -180,7 +215,7 @@ for brand in scrape_params['scrape_brands']:
 
 		while page_number <= total_review_pages:
 			scrape_url = scrape_params['base_url'] + scrape_id + '/?page=' + str(page_number)
-			print(scrape_url)
+			print(f"Processing: {scrape_url}")
 			chrome_driver.get(scrape_url);
 			review_list = chrome_driver.find_elements(By.CSS_SELECTOR, "div.customer-review-body")
 			for review in review_list:
@@ -189,9 +224,9 @@ for brand in scrape_params['scrape_brands']:
 			page_number += 1
 		
 		if product_csv_enabled:
-			create_csv(brand + '_' + scrape_id, product_csv)
+			create_csv(scrape_params['marketplace'] + '_' + brand + '_' + scrape_id, product_csv)
 	if brand_csv_enabled:
-		create_csv(brand, brand_csv)
+		create_csv(scrape_params['marketplace'] + '_' + brand, brand_csv)
 if marketplace_csv_enabled:
 	create_csv(scrape_params['marketplace'], marketplace_csv)
 

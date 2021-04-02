@@ -5,6 +5,7 @@ import dateutil.parser
 import json
 import requests
 import pandas
+import numpy
 import nltk
 from nltk.stem import WordNetLemmatizer
 from nltk.corpus import wordnet
@@ -23,8 +24,14 @@ marketplace_name = 'target.com'
 
 scrape_params = {
 	'honest_kids_juice': {
-        'scrape_ids': ['13783652']
-	}
+        'scrape_ids': ['13783652','52270196','52270091','13177785']
+	},
+    'smart_water': {
+        'scrape_ids': ['12953552','14938264','12953554','54583869']
+    },
+    'simply': {
+        'scrape_ids': ['13182511','51624049','13183166','13183052','13182509']
+    }
 }
 
 def dataset():
@@ -37,14 +44,16 @@ def dataset():
     	'review_time': ["Date"],
     	'review_length': ["Numeric"],
     	'feedback_positive': ["Numeric"],
-    	'feedback_negative': ["Numeric"],
+    	'product_name': ["Ignore"],
     	'product_brand': ["Ignore"],
     	'product_scrape_id': ["Ignore"],
-    	'author_nickname': ["Ignore"]
+    	'author_nickname': ["Ignore"],
+        'marketplace': ["Ignore"]
     }
     return data
 
 def get_clean_text(text):
+    re_0 = "(\t|\n|\r)" #match tabs, newlines, carriage returns
     re_1 = "\.{1,}" #match multiple periods in a row
     re_2 = "(\’|\')" #match apostrophes
     re_3 = "\%" #match percent % characters
@@ -52,6 +61,7 @@ def get_clean_text(text):
     re_5 = "\s{2,}" #match multiple spaces in a row
     
     review_text = text.lower()
+    review_text = re.sub(re_0, " ", review_text)
     review_text = re.sub(re_1, " ", review_text)
     review_text = re.sub(re_2, "", review_text)
     review_text = re.sub(re_3, " percent", review_text)
@@ -59,6 +69,21 @@ def get_clean_text(text):
     review_text = re.sub(re_5, " ", review_text)
     
     return review_text
+    
+    return review_text
+
+def get_clean_number(number):
+    re_1 = "\D"
+
+    clean_number = re.sub(re_1,"",number)
+
+    return clean_number
+
+def get_clean_date(date):
+    dirty_date = date
+    clean_date = dateutil.parser.parse(dirty_date)
+    clean_date = clean_date.strftime('%m/%d/%y')
+    return clean_date
 
 def get_wordnet_pos(word):
     """Map POS tag to first character lemmatize() accepts"""
@@ -90,11 +115,16 @@ def validate_csv(data):
     return is_valid
 
 def create_csv(filename, data):
+    file_path = "C:\\Users\\Bogdan\\Desktop\\APS\\Coke\\target\\"
     file_name = filename + '_review_data_' + datetime.today().strftime('%Y_%m_%d') + '.csv'
     data_frame = pandas.DataFrame(data)
-    if validate_csv(data):
-        data_frame.to_csv(file_name.lower(), encoding='utf-8-sig', index=False)
-        print(f"Finished writing {file_name}")
+    data_frame['review_rating'].replace('', numpy.nan, inplace=True)
+    data_frame['clean_review_text'].replace('', numpy.nan, inplace=True)
+    data_frame.dropna(subset=['review_rating'], inplace=True)
+    data_frame.dropna(subset=['clean_review_text'], inplace=True)
+    data_frame.drop_duplicates(subset=['clean_review_text'], inplace=True)
+    data_frame.to_csv(file_path+file_name.lower(), encoding='utf-8-sig', index=False)
+    print(f"Finished writing {file_name}")
 
 def append_data(key, value):
     aggregate_csv[key].append(value)
@@ -121,7 +151,7 @@ def process_review(review, current_id):
     
     #we check if the review text exists, and if it does we retrieve the value
     if review.get('text'):
-        append_data('review_text', review.get('text').encode('UTF-8').decode('UTF-8'))
+        append_data('review_text', get_clean_text(review.get('text').encode('UTF-8').decode('UTF-8')))
     else:
         append_data('review_text','')
         
@@ -133,7 +163,7 @@ def process_review(review, current_id):
     
     #we check if the review date text exists, and if it does we retrieve the value
     if review.get('submitted_at'):
-        append_data('review_time', review.get('submitted_at'))
+        append_data('review_time', get_clean_date(review.get('submitted_at')))
     else:
         append_data('review_time','')
 
@@ -148,18 +178,15 @@ def process_review(review, current_id):
         append_data('feedback_positive', review.get('feedback').get('helpful'))
     else:
         append_data('feedback_positive','0')
-   
-    #we check if feedback negative exists, and if it does we retrieve the value
-    if review.get('feedback').get('unhelpful'):
-        append_data('feedback_negative', review.get('feedback').get('unhelpful'))
-    else:
-        append_data('feedback_negative','0')           
 
     #we check if author nickname exists, and if it does we retrieve the value
     if review.get('author').get('nickname'):
         append_data('author_nickname', review.get('author').get('nickname'))
     else:
         append_data('author_nickname','')
+
+    append_data('product_name', product_name)
+    append_data('marketplace','target')
 
 aggregate_csv = dataset()
 
@@ -194,8 +221,8 @@ for brand in scrape_params:
             inital_api_call = requests.get(scrape_url, url_params)
             inital_api_call_data=inital_api_call.json()
             
-            print(inital_api_call.url)
-            print(inital_api_call_data)
+            #print(inital_api_call.url)
+            #print(inital_api_call_data)
             
             total_reviews = inital_api_call_data.get('total_results')
             print(f"Total available reviews: {total_reviews}")
@@ -205,6 +232,8 @@ for brand in scrape_params:
             else:
                 scraping_iterations = divmod(total_reviews, 100)[0] + 1
             print(f"Total scraping iterations: {scraping_iterations}")
+
+            product_name = ''
             
             current_iteration = 0
             current_page = 0
@@ -215,7 +244,7 @@ for brand in scrape_params:
                 scrape_iteration = requests.get(scrape_url, url_params)
                 scrape_iteration_data = scrape_iteration.json()
                 
-                print(scrape_iteration.url)
+                print(f"Processing: {scrape_iteration.url}")
                 #print(scrape_iteration.data)        
                 
                 scrape_review_data = scrape_iteration_data.get('results')
@@ -237,10 +266,10 @@ for brand in scrape_params:
 
 
             if product_csv_enabled:
-                create_csv(brand + '_' + scrape_id, product_csv)
+                create_csv(marketplace_name + '_' + brand + '_' + scrape_id, product_csv)
 
     if brand_csv_enabled:
-        create_csv(brand, brand_csv)      
+        create_csv(marketplace_name + '_' + brand, brand_csv)      
 
 if aggregate_csv_enabled:
     create_csv(marketplace_name, aggregate_csv)
